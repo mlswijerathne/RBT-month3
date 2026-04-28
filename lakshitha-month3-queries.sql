@@ -1,25 +1,26 @@
 -- ============================================================
 -- ShopFlow E-Commerce Platform - Complex Queries
--- Dialect: SQL Server (T-SQL)
+-- Dialect: PostgreSQL
 -- ============================================================
 
 
 -- ── Query 1: Top Selling Products by Category ────────────────
 
-SELECT TOP 10
+SELECT
   c.name                              AS category,
   p.name                              AS product,
   SUM(oi.quantity)                    AS total_units_sold,
   SUM(oi.quantity * oi.unit_price)    AS revenue
 FROM order_items oi
-JOIN orders       o  ON oi.order_id   = o.id
-JOIN product_variants pv              ON oi.variant_id  = pv.id
-JOIN products     p  ON pv.product_id = p.id
-JOIN categories   c  ON p.category_id = c.id
+JOIN orders           o  ON oi.order_id   = o.id
+JOIN product_variants pv ON oi.variant_id = pv.id
+JOIN products         p  ON pv.product_id = p.id
+JOIN categories       c  ON p.category_id = c.id
 WHERE o.status      = 'delivered'
-  AND o.created_at >= DATEADD(day, -30, GETDATE())
+  AND o.created_at >= CURRENT_DATE - INTERVAL '30 days'
 GROUP BY c.id, c.name, p.id, p.name
-ORDER BY revenue DESC;
+ORDER BY revenue DESC
+LIMIT 10;
 
 
 -- ── Query 2: Customer Lifetime Value ─────────────────────────
@@ -27,29 +28,30 @@ ORDER BY revenue DESC;
 WITH customer_stats AS (
   SELECT
     u.id,
-    CONCAT(u.first_name, ' ', u.last_name)  AS full_name,
+    u.first_name || ' ' || u.last_name   AS full_name,
     u.email,
-    COUNT(o.id)                              AS total_orders,
-    SUM(o.total_amount)                      AS lifetime_value,
-    AVG(o.total_amount)                      AS avg_order_value,
-    MIN(o.created_at)                        AS first_order_at,
-    MAX(o.created_at)                        AS last_order_at
+    COUNT(o.id)                           AS total_orders,
+    SUM(o.total_amount)                   AS lifetime_value,
+    AVG(o.total_amount)                   AS avg_order_value,
+    MIN(o.created_at)                     AS first_order_at,
+    MAX(o.created_at)                     AS last_order_at
   FROM users u
   JOIN orders o ON o.user_id = u.id
   WHERE o.status NOT IN ('cancelled', 'refunded')
   GROUP BY u.id, u.first_name, u.last_name, u.email
 )
-SELECT TOP 20
+SELECT
   full_name,
   email,
   total_orders,
   lifetime_value,
   ROUND(avg_order_value, 2)                        AS avg_order_value,
-  CAST(first_order_at AS DATE)                     AS first_order,
-  CAST(last_order_at  AS DATE)                     AS last_order,
+  first_order_at::DATE                             AS first_order,
+  last_order_at::DATE                              AS last_order,
   RANK() OVER (ORDER BY lifetime_value DESC)       AS clv_rank
 FROM customer_stats
-ORDER BY lifetime_value DESC;
+ORDER BY lifetime_value DESC
+LIMIT 20;
 
 
 -- ── Query 3: Inventory Low Stock Alert ───────────────────────
@@ -67,25 +69,25 @@ FROM inventory i
 JOIN product_variants pv ON i.variant_id  = pv.id
 JOIN products         p  ON pv.product_id = p.id
 WHERE (i.quantity_in_stock - i.quantity_reserved) <= i.low_stock_threshold
-  AND pv.is_active = 1
-  AND p.is_active  = 1
+  AND pv.is_active = true
+  AND p.is_active  = true
 ORDER BY available_stock ASC;
 
 
 -- ── Query 4: Review Statistics by Product ────────────────────
 
 SELECT
-  p.name                                                          AS product,
-  COUNT(r.id)                                                     AS total_reviews,
-  ROUND(AVG(CAST(r.rating AS DECIMAL(4,2))), 2)                  AS avg_rating,
-  SUM(CASE WHEN r.rating = 5  THEN 1 ELSE 0 END)                 AS five_star,
-  SUM(CASE WHEN r.rating = 4  THEN 1 ELSE 0 END)                 AS four_star,
-  SUM(CASE WHEN r.rating = 3  THEN 1 ELSE 0 END)                 AS three_star,
-  SUM(CASE WHEN r.rating <= 2 THEN 1 ELSE 0 END)                 AS low_ratings,
-  SUM(CASE WHEN r.is_verified = 1 THEN 1 ELSE 0 END)             AS verified_reviews
+  p.name                                                        AS product,
+  COUNT(r.id)                                                   AS total_reviews,
+  ROUND(AVG(r.rating), 2)                                       AS avg_rating,
+  COUNT(r.id) FILTER (WHERE r.rating = 5)                       AS five_star,
+  COUNT(r.id) FILTER (WHERE r.rating = 4)                       AS four_star,
+  COUNT(r.id) FILTER (WHERE r.rating = 3)                       AS three_star,
+  COUNT(r.id) FILTER (WHERE r.rating <= 2)                      AS low_ratings,
+  COUNT(r.id) FILTER (WHERE r.is_verified = true)               AS verified_reviews
 FROM products p
 LEFT JOIN reviews r ON r.product_id = p.id
-WHERE p.is_active = 1
+WHERE p.is_active = true
 GROUP BY p.id, p.name
 HAVING COUNT(r.id) > 0
 ORDER BY avg_rating DESC, total_reviews DESC;
@@ -95,7 +97,7 @@ ORDER BY avg_rating DESC, total_reviews DESC;
 
 SELECT
   u.email,
-  CONCAT(u.first_name, ' ', u.last_name)     AS full_name,
+  u.first_name || ' ' || u.last_name         AS full_name,
   COUNT(ci.id)                                AS items_in_cart,
   SUM(ci.quantity)                            AS total_quantity,
   SUM(ci.quantity * (
@@ -110,7 +112,7 @@ JOIN products         p  ON pv.product_id = p.id
 LEFT JOIN orders      o  ON o.user_id     = u.id
                         AND o.created_at  > c.updated_at
 WHERE o.id IS NULL
-  AND c.updated_at >= DATEADD(day, -7, GETDATE())
+  AND c.updated_at >= CURRENT_DATE - INTERVAL '7 days'
 GROUP BY u.id, u.email, u.first_name, u.last_name, c.updated_at
 ORDER BY estimated_cart_value DESC;
 
@@ -126,21 +128,21 @@ SELECT
     COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 2
   )                               AS percentage
 FROM orders
-WHERE created_at >= DATEADD(day, 1 - DAY(GETDATE()), CAST(GETDATE() AS DATE))
+WHERE created_at >= DATE_TRUNC('month', CURRENT_DATE)
 GROUP BY status
 ORDER BY order_count DESC;
 
 
 -- ── Query 7: Category Hierarchy with Product Counts ──────────
 
-WITH category_tree AS (
+WITH RECURSIVE category_tree AS (
   SELECT
     id,
     name,
     parent_id,
     slug,
-    0                   AS depth,
-    CAST(name AS VARCHAR(1000)) AS path
+    0           AS depth,
+    name::TEXT  AS path
   FROM categories
   WHERE parent_id IS NULL
 
@@ -152,15 +154,15 @@ WITH category_tree AS (
     c.parent_id,
     c.slug,
     ct.depth + 1,
-    CAST(ct.path + ' > ' + c.name AS VARCHAR(1000))
+    ct.path || ' > ' || c.name
   FROM categories c
   JOIN category_tree ct ON c.parent_id = ct.id
 )
 SELECT
   ct.path,
   ct.depth,
-  COUNT(p.id)                                         AS product_count,
-  SUM(CASE WHEN p.is_active = 1 THEN 1 ELSE 0 END)   AS active_products
+  COUNT(p.id)                                           AS product_count,
+  COUNT(p.id) FILTER (WHERE p.is_active = true)         AS active_products
 FROM category_tree ct
 LEFT JOIN products p ON p.category_id = ct.id
 GROUP BY ct.id, ct.path, ct.depth
@@ -171,9 +173,9 @@ ORDER BY ct.path;
 
 WITH user_orders AS (
   SELECT
-    u.id                                                AS user_id,
-    CONCAT(u.first_name, ' ', u.last_name)             AS full_name,
-    o.id                                                AS order_id,
+    u.id                                              AS user_id,
+    u.first_name || ' ' || u.last_name               AS full_name,
+    o.id                                              AS order_id,
     o.status,
     o.total_amount,
     o.created_at
@@ -186,13 +188,13 @@ SELECT
   order_id,
   status,
   total_amount,
-  CAST(created_at AS DATE)                              AS order_date,
+  created_at::DATE                                    AS order_date,
   SUM(total_amount)  OVER (PARTITION BY user_id
-                           ORDER BY created_at)         AS running_total,
+                           ORDER BY created_at)       AS running_total,
   ROW_NUMBER()       OVER (PARTITION BY user_id
-                           ORDER BY created_at)         AS order_number,
+                           ORDER BY created_at)       AS order_number,
   LAG(total_amount)  OVER (PARTITION BY user_id
-                           ORDER BY created_at)         AS previous_order_amount
+                           ORDER BY created_at)       AS previous_order_amount
 FROM user_orders
 ORDER BY user_id, created_at;
 
@@ -211,7 +213,7 @@ SELECT
   END                                               AS usage_percentage,
   SUM(o.discount_amount)                            AS total_discount_given,
   SUM(o.total_amount)                               AS revenue_with_promo,
-  CAST(pr.expires_at AS DATE)                       AS expires_on
+  pr.expires_at::DATE                               AS expires_on
 FROM promotions pr
 LEFT JOIN orders o ON o.promotion_id = pr.id
                AND o.status NOT IN ('cancelled', 'refunded')
@@ -224,16 +226,16 @@ ORDER BY times_used DESC;
 
 WITH monthly_revenue AS (
   SELECT
-    DATEADD(month, DATEDIFF(month, 0, created_at), 0)  AS month,
-    COUNT(*)                                             AS order_count,
-    SUM(total_amount)                                    AS revenue,
-    SUM(discount_amount)                                 AS total_discounts
+    DATE_TRUNC('month', created_at)   AS month,
+    COUNT(*)                           AS order_count,
+    SUM(total_amount)                  AS revenue,
+    SUM(discount_amount)               AS total_discounts
   FROM orders
   WHERE status NOT IN ('cancelled', 'refunded')
-  GROUP BY DATEADD(month, DATEDIFF(month, 0, created_at), 0)
+  GROUP BY DATE_TRUNC('month', created_at)
 )
 SELECT
-  FORMAT(month, 'yyyy-MM')                              AS month,
+  TO_CHAR(month, 'YYYY-MM')           AS month,
   order_count,
   revenue,
   total_discounts,
@@ -241,6 +243,6 @@ SELECT
     (revenue - LAG(revenue) OVER (ORDER BY month))
     * 100.0
     / NULLIF(LAG(revenue) OVER (ORDER BY month), 0),
-  2)                                                    AS mom_growth_pct
+  2)                                  AS mom_growth_pct
 FROM monthly_revenue
 ORDER BY month;
